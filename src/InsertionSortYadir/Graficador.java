@@ -9,6 +9,7 @@ package InsertionSortYadir;
  * @author Yadir Diaz
  */
 import java.awt.BasicStroke;
+import javax.swing.JDialog;
 import java.awt.Image;
 import java.net.URL;
 import javax.swing.ImageIcon;
@@ -48,8 +49,18 @@ import org.jfree.chart.ChartPanel;
 import org.jfree.chart.JFreeChart;
 import org.jfree.chart.plot.CategoryPlot;
 import org.jfree.chart.plot.PlotOrientation;
+import java.awt.GridBagConstraints;
+import java.awt.GridBagLayout;
+import java.awt.Insets;
 import org.jfree.chart.renderer.category.LineAndShapeRenderer;
 import org.jfree.data.category.DefaultCategoryDataset;
+import org.jfree.chart.labels.StandardCategoryToolTipGenerator;
+import java.io.File;
+import javax.swing.JFileChooser;
+import javax.swing.JOptionPane;
+import org.jfree.chart.ChartUtils;
+
+
 
 public class Graficador {
 
@@ -68,28 +79,44 @@ public class Graficador {
     private static final Color COLOR_EXITO_BG = new Color(220, 252, 231);
     private static final Color COLOR_EXITO_TXT = new Color(22, 101, 52);
 
-    // Estima automáticamente la complejidad Big O experimental.
+    // Estima la complejidad Big-O usando ajuste log-log sobre todos los puntos estables
     public static String identificarBigO(List<Long> tiempos, List<Integer> tamagnios) {
-        long primerTiempo = tiempos.get(0);
-        long ultimoTiempo = tiempos.get(tiempos.size() - 1);
-        int primerN = tamagnios.get(0);
-        int ultimoN = tamagnios.get(tamagnios.size() - 1);
-
-        double factorTiempo = (double) ultimoTiempo / primerTiempo;
-        double factorN = (double) ultimoN / primerN;
-        double relacion = factorTiempo / factorN;
-
-        if (relacion < 0.2) {
-            return "O(log n)";
-        }
-        if (relacion < 2) {
+        if (tiempos == null || tiempos.size() < 3) {
             return "O(n)";
         }
-        if (relacion < 15) {
+
+        // Ignoramos los 2 primeros puntos (calentamiento inicial de la JVM)
+        int inicio = Math.min(2, tiempos.size() - 2);
+        double sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+        int count = 0;
+
+        for (int i = inicio; i < tiempos.size(); i++) {
+            double x = Math.log(tamagnios.get(i));
+            double y = Math.log(Math.max(1, tiempos.get(i)));
+            sumX += x;
+            sumY += y;
+            sumXY += x * y;
+            sumX2 += x * x;
+            count++;
+        }
+
+        // Pendiente de la recta en escala log-log = exponente real k de O(n^k)
+        double exponente = (count * sumXY - sumX * sumY) / (count * sumX2 - sumX * sumX);
+
+        if (exponente < 0.30) {
+            return "O(log n)";
+        }
+        if (exponente < 0.70) {
+            return "O(n)";
+        }
+        if (exponente < 1.15) {
             return "O(n log n)";
         }
         return "O(n²)";
+
     }
+
+
 
     // Estiliza cualquier gráfica JFreeChart.
     private static void estilizarGrafica(JFreeChart chart, Color[] coloresSeries) {
@@ -109,6 +136,7 @@ public class Graficador {
         plot.setDomainGridlinePaint(new Color(226, 232, 240));
         plot.setRangeGridlinePaint(new Color(226, 232, 240));
         plot.setOutlineVisible(false);
+        plot.setNoDataMessage(""); // Oculta el texto estático de JFreeChart
 
         plot.getDomainAxis().setLabelFont(new Font("Segoe UI", Font.BOLD, 12));
         plot.getDomainAxis().setTickLabelFont(new Font("Segoe UI", Font.PLAIN, 11));
@@ -116,14 +144,84 @@ public class Graficador {
         plot.getRangeAxis().setTickLabelFont(new Font("Segoe UI", Font.PLAIN, 11));
 
         LineAndShapeRenderer renderer = new LineAndShapeRenderer();
+        StandardCategoryToolTipGenerator tooltipGen = new StandardCategoryToolTipGenerator(
+                "{0} | N = {1} → {2} ns", NumberFormat.getInstance(Locale.US));
+        renderer.setDefaultToolTipGenerator(tooltipGen);
+
         for (int i = 0; i < coloresSeries.length; i++) {
             renderer.setSeriesPaint(i, coloresSeries[i]);
             renderer.setSeriesStroke(i, new BasicStroke(3.0f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
             renderer.setSeriesShapesVisible(i, true);
             renderer.setSeriesShapesFilled(i, true);
+            renderer.setSeriesToolTipGenerator(i, tooltipGen);
         }
         plot.setRenderer(renderer);
     }
+
+    
+    // Agrega un cartel flotante gris que rebota arriba y abajo mientras no haya puntos dibujados
+    private static void activarMensajeAnimado(ChartPanel chartPanel, DefaultCategoryDataset dataset) {
+        chartPanel.setDisplayToolTips(true); // Activa los tooltips nativos de JFreeChart sobre los puntos
+        chartPanel.setLayout(null);
+
+        JLabel lblAviso = new JLabel("▼ Selecciona una opción en la parte de abajo ▼", SwingConstants.CENTER);
+        lblAviso.setFont(new Font("Segoe UI", Font.BOLD, 20));
+        lblAviso.setForeground(new Color(71, 85, 105)); // Gris pizarra elegante
+        lblAviso.setBackground(new Color(241, 245, 249, 240)); // Fondo gris suave
+        lblAviso.setOpaque(true);
+        lblAviso.setBorder(BorderFactory.createCompoundBorder(
+                new LineBorder(new Color(148, 163, 184), 2, true),
+                new EmptyBorder(10, 20, 10, 20)
+        ));
+
+        chartPanel.add(lblAviso);
+
+        // Temporizador cada 20ms para mover el cartel suavemente
+        Timer timerMovimiento = new Timer(20, e -> {
+            // Revisa si ya existe al menos un dato numérico (no nulo) en la gráfica
+            boolean tieneDatos = false;
+            for (int r = 0; r < dataset.getRowCount(); r++) {
+                for (int c = 0; c < dataset.getColumnCount(); c++) {
+                    if (dataset.getValue(r, c) != null) {
+                        tieneDatos = true;
+                        break;
+                    }
+                }
+                if (tieneDatos) {
+                    break;
+                }
+            }
+
+            // Si ya hay puntos dibujados, oculta el mensaje
+            if (tieneDatos) {
+                lblAviso.setVisible(false);
+                return;
+            }
+
+            lblAviso.setVisible(true);
+            int anchoPanel = chartPanel.getWidth();
+            int altoPanel = chartPanel.getHeight();
+
+            if (anchoPanel > 0 && altoPanel > 0) {
+                int anchoLbl = 520;
+                int altoLbl = 50;
+                int posX = (anchoPanel - anchoLbl) / 2;
+
+                // Movimiento vertical de rebote suave (+/- 14 píxeles)
+                int desplazamientoY = (int) (Math.sin(System.currentTimeMillis() / 220.0) * 14);
+                int posY = ((altoPanel - altoLbl) / 2) + desplazamientoY;
+
+                lblAviso.setBounds(posX, posY, anchoLbl, altoLbl);
+                chartPanel.repaint();
+            }
+        });
+        timerMovimiento.start();
+    }
+
+
+
+
+
 
     // Crea un botón moderno estilizado.
     private static JButton crearBotonEstilizado(String texto, Color fondo) {
@@ -138,6 +236,30 @@ public class Graficador {
         btn.setBorder(new EmptyBorder(8, 16, 8, 16));
         return btn;
     }
+
+    // Guarda cualquier gráfica JFreeChart como imagen PNG en la ruta elegida por el usuario
+    private static void exportarGraficaPNG(Component parent, JFreeChart chart, String nombreSugerido) {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle("Guardar Gráfica como Imagen PNG");
+        chooser.setSelectedFile(new File(nombreSugerido.replaceAll("\\s+", "_") + ".png"));
+        if (chooser.showSaveDialog(parent) == JFileChooser.APPROVE_OPTION) {
+            try {
+                File archivo = chooser.getSelectedFile();
+                if (!archivo.getName().toLowerCase().endsWith(".png")) {
+                    archivo = new File(archivo.getAbsolutePath() + ".png");
+                }
+                ChartUtils.saveChartAsPNG(archivo, chart, 1100, 620);
+                JOptionPane.showMessageDialog(parent,
+                        "Gráfica guardada correctamente en:\n" + archivo.getAbsolutePath(),
+                        "Exportación Exitosa", JOptionPane.INFORMATION_MESSAGE);
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(parent,
+                        "Error al guardar la imagen: " + ex.getMessage(),
+                        "Error", JOptionPane.ERROR_MESSAGE);
+            }
+        }
+    }
+
 
     // Crea una tarjeta KPI con título y valor destacado.
     private static JPanel crearTarjetaKPI(String titulo, String valor, Color colorValor, Color fondoTarjeta) {
@@ -263,18 +385,46 @@ public class Graficador {
         panelIzquierdo.setBackground(COLOR_FONDO);
         panelIzquierdo.setBorder(new EmptyBorder(15, 15, 15, 10));
 
-        JPanel panelKPIs = new JPanel(new GridLayout(1, 4, 10, 0));
+        // Usa GridBagLayout para darle más espacio a la tarjeta de verificación
+        JPanel panelKPIs = new JPanel(new GridBagLayout());
         panelKPIs.setBackground(COLOR_FONDO);
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.fill = GridBagConstraints.BOTH;
+        gbc.gridy = 0;
 
-        panelKPIs.add(crearTarjetaKPI(
-                "Calidad de Orden",
-                calidadVerificada ? "✔ APROBADO" : "✖ ERROR",
-                calidadVerificada ? COLOR_EXITO_TXT : Color.RED,
-                calidadVerificada ? COLOR_EXITO_BG : new Color(254, 226, 226)
-        ));
-        panelKPIs.add(crearTarjetaKPI("Complejidad Big-O", complejidad, colorPrincipal, COLOR_TARJETA));
-        panelKPIs.add(crearTarjetaKPI("Tiempo Promedio", nf.format((long) promedio) + " ns", COLOR_TEXTO, COLOR_TARJETA));
-        panelKPIs.add(crearTarjetaKPI("Tiempo Máximo", nf.format(max) + " ns", COLOR_TEXTO, COLOR_TARJETA));
+        // Tarjeta 1: Verificación dinámica (más ancha: weightx = 2.2)
+        JPanel cardVerificacion = crearTarjetaKPI(
+                "Verificación del Arreglo",
+                "En espera de ejecución...",
+                COLOR_SUBTEXTO,
+                COLOR_TARJETA
+        );
+        cardVerificacion.setToolTipText("Comprueba matemáticamente que cada elemento sea menor o igual al siguiente: A[i] ≤ A[i+1]");
+        JLabel lblValorVerificacion = (JLabel) cardVerificacion.getComponent(1);
+
+        gbc.gridx = 0;
+        gbc.weightx = 2.2;
+        gbc.insets = new Insets(0, 0, 0, 10);
+        panelKPIs.add(cardVerificacion, gbc);
+
+        // Tarjeta 2: Complejidad Big-O (más compacta: weightx = 0.9)
+        gbc.gridx = 1;
+        gbc.weightx = 0.9;
+        gbc.insets = new Insets(0, 0, 0, 10);
+        panelKPIs.add(crearTarjetaKPI("Complejidad Big-O", complejidad, colorPrincipal, COLOR_TARJETA), gbc);
+
+        // Tarjeta 3: Tiempo Promedio (más compacta: weightx = 1.0)
+        gbc.gridx = 2;
+        gbc.weightx = 1.0;
+        gbc.insets = new Insets(0, 0, 0, 10);
+        panelKPIs.add(crearTarjetaKPI("Tiempo Promedio", nf.format((long) promedio) + " ns", COLOR_TEXTO, COLOR_TARJETA), gbc);
+
+        // Tarjeta 4: Tiempo Máximo (más compacta: weightx = 1.0)
+        gbc.gridx = 3;
+        gbc.weightx = 1.0;
+        gbc.insets = new Insets(0, 0, 0, 0);
+        panelKPIs.add(crearTarjetaKPI("Tiempo Máximo", nf.format(max) + " ns", COLOR_TEXTO, COLOR_TARJETA), gbc);
+
 
         JFreeChart chart = ChartFactory.createLineChart(
                 "Curva de Rendimiento: " + nombreFuncion,
@@ -293,6 +443,9 @@ public class Graficador {
                 new LineBorder(COLOR_BORDE, 1, true),
                 new EmptyBorder(10, 10, 10, 10)
         ));
+        activarMensajeAnimado(chartPanel, dataset);
+       
+        
         chartPanel.setBackground(COLOR_TARJETA);
 
         // Barra inferior de controles para animar la gráfica individual.
@@ -310,7 +463,11 @@ public class Graficador {
         barraControles.add(btnPlay);
         barraControles.add(btnReiniciar);
         barraControles.add(btnVerTodo);
+        JButton btnExportar = crearBotonEstilizado("Guardar PNG", new Color(100, 116, 139));
+        btnExportar.addActionListener(e -> exportarGraficaPNG(chartPanel, chart, "Grafica_" + nombreFuncion));
+        barraControles.add(btnExportar);
         barraControles.add(lblEstado);
+
 
         JPanel centroGrafica = new JPanel(new BorderLayout(0, 10));
         centroGrafica.setBackground(COLOR_FONDO);
@@ -362,8 +519,27 @@ public class Graficador {
 
                 indiceActual[0]++;
                 lblEstado.setText("Punto " + indiceActual[0] + " de " + tamagnos.size() + " (N = " + nf.format(n) + ")");
+
+                // Actualiza la tarjeta mientras se evalúa cada tamaño N
+                if (indiceActual[0] < tamagnos.size()) {
+                    cardVerificacion.setBackground(new Color(254, 249, 195)); // Amarillo suave (en proceso)
+                    lblValorVerificacion.setForeground(new Color(161, 98, 7));
+                    lblValorVerificacion.setText("Verificando N = " + nf.format(n) + "...");
+                } else {
+                    // Cuando llega al último punto, muestra la confirmación matemática final
+                    if (calidadVerificada) {
+                        cardVerificacion.setBackground(COLOR_EXITO_BG);
+                        lblValorVerificacion.setForeground(COLOR_EXITO_TXT);
+                        lblValorVerificacion.setText("[OK] Ordenado (A[i] ≤ A[i+1])");
+                    } else {
+                        cardVerificacion.setBackground(new Color(254, 226, 226));
+                        lblValorVerificacion.setForeground(Color.RED);
+                        lblValorVerificacion.setText("[X] Desordenado");
+                    }
+                }
             }
         };
+
 
         Timer timer = new Timer(600, null);
         timer.addActionListener(e -> {
@@ -403,7 +579,14 @@ public class Graficador {
             }
             btnPlay.setText("▶  Reproducir Avance");
             lblEstado.setText("Reiniciado (0 / " + tamagnos.size() + ")");
+
+            // Devuelve la tarjeta de verificación a su estado inicial
+            cardVerificacion.setBackground(COLOR_TARJETA);
+            lblValorVerificacion.setForeground(COLOR_SUBTEXTO);
+            lblValorVerificacion.setText("En espera de ejecución...");
         });
+
+
 
         btnVerTodo.addActionListener(e -> {
             timer.stop();
@@ -485,6 +668,8 @@ public class Graficador {
                 new LineBorder(COLOR_BORDE, 1, true),
                 new EmptyBorder(10, 10, 10, 10)
         ));
+        activarMensajeAnimado(chartPanel, dataset);
+        
         chartPanel.setBackground(COLOR_TARJETA);
         JPanel barraControles = new JPanel(new FlowLayout(FlowLayout.CENTER, 12, 8));
         barraControles.setBackground(COLOR_TARJETA);
@@ -498,6 +683,9 @@ public class Graficador {
         barraControles.add(btnPlay);
         barraControles.add(btnReiniciar);
         barraControles.add(btnVerTodo);
+        JButton btnExportar = crearBotonEstilizado("Guardar PNG", new Color(100, 116, 139));
+        btnExportar.addActionListener(e -> exportarGraficaPNG(chartPanel, chart, "Comparacion_General"));
+        barraControles.add(btnExportar);
         barraControles.add(lblEstado);
         JPanel centroGrafica = new JPanel(new BorderLayout(0, 10));
         centroGrafica.setBackground(COLOR_FONDO);
@@ -627,8 +815,9 @@ public class Graficador {
         lblNombreUni.setForeground(Color.WHITE);
 
         JLabel lblFacultad = new JLabel("Facultad de Ingeniería y Ciencias Básicas", SwingConstants.RIGHT);
-        lblFacultad.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        lblFacultad.setFont(new Font("Segoe UI", Font.PLAIN, 11));
         lblFacultad.setForeground(new Color(203, 213, 225));
+
 
         textosUni.add(lblNombreUni);
         textosUni.add(lblFacultad);
@@ -671,50 +860,163 @@ public class Graficador {
 // Abre la ventana principal con encabezado moderno y pestañas estilizadas.
    
     public static void mostrarDashboardCompleto(
-            List tamagnos,
-            List tiemposInsertion, boolean calidadInsertion,
-            List tiemposBubble, boolean calidadBubble,
-            List tiemposQuick, boolean calidadQuick) {
+            List<Integer> tamagnos,
+            List<Long> tiemposInsertion, boolean calidadInsertion,
+            List<Long> tiemposBubble, boolean calidadBubble,
+            List<Long> tiemposQuick, boolean calidadQuick) {
+
         try {
             UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
         } catch (Exception ignored) {
         }
+
         JFrame frame = new JFrame("Análisis Comparativo de Algoritmos de Ordenamiento");
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         frame.setLayout(new BorderLayout());
-        JPanel header = new JPanel(new BorderLayout());
+
+        JPanel header = new JPanel(new BorderLayout(20, 0));
         header.setBackground(COLOR_PRIMARIO);
-        header.setBorder(new EmptyBorder(14, 20, 14, 20));
+        header.setBorder(new EmptyBorder(12, 20, 12, 20));
+
         JLabel tituloApp = new JLabel("PRODUCTO DIDÁCTICO Y COMPARATIVO DE ORDENAMIENTO");
-        tituloApp.setFont(new Font("Segoe UI", Font.BOLD, 18));
+        tituloApp.setFont(new Font("Segoe UI", Font.BOLD, 16));
         tituloApp.setForeground(Color.WHITE);
+
         JLabel subtituloApp = new JLabel("Análisis de complejidad Big-O, verificación de calidad y benchmarking experimental  |  Autor: Yadir Diaz");
-        subtituloApp.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        subtituloApp.setFont(new Font("Segoe UI", Font.PLAIN, 11));
         subtituloApp.setForeground(new Color(148, 163, 184));
-        JPanel textosHeader = new JPanel(new GridLayout(2, 1, 0, 2));
+
+        JPanel textosHeader = new JPanel(new GridLayout(2, 1, 0, 3));
         textosHeader.setOpaque(false);
         textosHeader.add(tituloApp);
         textosHeader.add(subtituloApp);
-        header.add(textosHeader, BorderLayout.WEST);
-        header.add(crearPanelUniversidad(), BorderLayout.EAST);
+
+        JButton btnAyuda = crearBotonEstilizado("?  Guía de Uso", new Color(51, 65, 85));
+        btnAyuda.setToolTipText("Abrir la guía rápida de instrucciones y descripción del programa");
+        btnAyuda.addActionListener(e -> mostrarVentanaBienvenida(frame));
+
+        JPanel panelDerechoHeader = new JPanel(new FlowLayout(FlowLayout.RIGHT, 14, 0));
+        panelDerechoHeader.setOpaque(false);
+        panelDerechoHeader.add(btnAyuda);
+        panelDerechoHeader.add(crearPanelUniversidad());
+
+        header.add(textosHeader, BorderLayout.CENTER);
+        header.add(panelDerechoHeader, BorderLayout.EAST);
+
+
         JTabbedPane pestanas = new JTabbedPane();
         pestanas.setFont(new Font("Segoe UI", Font.BOLD, 13));
         pestanas.setBackground(COLOR_FONDO);
+
         pestanas.addTab("  1. Insertion Sort (Propio)  ",
                 crearPanelIndividual(tiemposInsertion, tamagnos, "Insertion Sort",
                         InsertionSort.obtenerInformacion(), calidadInsertion, COLOR_INSERTION));
+
         pestanas.addTab("  2. Bubble Sort  ",
                 crearPanelIndividual(tiemposBubble, tamagnos, "Bubble Sort",
                         BubbleSort.obtenerInformacion(), calidadBubble, COLOR_BUBBLE));
+
         pestanas.addTab("  3. Quick Sort  ",
                 crearPanelIndividual(tiemposQuick, tamagnos, "Quick Sort",
                         QuickSort.obtenerInformacion(), calidadQuick, COLOR_QUICK));
+
         pestanas.addTab("  4. Comparación General  ",
                 crearPanelComparativo(tamagnos, tiemposInsertion, tiemposBubble, tiemposQuick));
+
         frame.add(header, BorderLayout.NORTH);
         frame.add(pestanas, BorderLayout.CENTER);
+
         frame.setSize(1340, 780);
         frame.setLocationRelativeTo(null);
         frame.setVisible(true);
+        mostrarVentanaBienvenida(frame);
     }
+    // Muestra una ventana de bienvenida explicando el propósito, pestañas y autor del programa
+
+    // Muestra una ventana de bienvenida explicando el propósito, pestañas y todas las herramientas nuevas
+    public static void mostrarVentanaBienvenida(JFrame parent) {
+        JDialog dialogo = new JDialog(parent, "Guía Rápida - Laboratorio de Ordenamiento", true);
+        dialogo.setSize(800, 690); // Tamaño amplio para mostrar todas las funciones sin recortes
+        dialogo.setLocationRelativeTo(parent);
+        dialogo.setResizable(false);
+        dialogo.setLayout(new BorderLayout());
+
+        // 1. Encabezado oscuro con el nombre del creador destacado
+        JPanel header = new JPanel(new BorderLayout(0, 8));
+        header.setBackground(COLOR_PRIMARIO);
+        header.setBorder(new EmptyBorder(20, 26, 20, 26));
+
+        JLabel lblTitulo = new JLabel("BIENVENIDO AL COMPARADOR DE ALGORITMOS");
+        lblTitulo.setFont(new Font("Segoe UI", Font.BOLD, 19));
+        lblTitulo.setForeground(Color.WHITE);
+
+        JLabel lblSubtitulo = new JLabel("Herramienta interactiva de benchmarking experimental y análisis Big-O");
+        lblSubtitulo.setFont(new Font("Segoe UI", Font.PLAIN, 13));
+        lblSubtitulo.setForeground(new Color(203, 213, 225));
+
+        JLabel lblAutor = new JLabel("Desarrollado por: Yadir Diaz  |  Universidad Central");
+        lblAutor.setFont(new Font("Segoe UI", Font.BOLD, 14));
+        lblAutor.setForeground(new Color(147, 197, 253));
+
+        JPanel panelTitulos = new JPanel(new GridLayout(3, 1, 0, 3));
+        panelTitulos.setOpaque(false);
+        panelTitulos.add(lblTitulo);
+        panelTitulos.add(lblSubtitulo);
+        panelTitulos.add(lblAutor);
+
+        header.add(panelTitulos, BorderLayout.CENTER);
+
+        // 2. Cuerpo central con tarjetas explicativas actualizadas
+        JPanel cuerpo = new JPanel();
+        cuerpo.setLayout(new BoxLayout(cuerpo, BoxLayout.Y_AXIS));
+        cuerpo.setBackground(COLOR_FONDO);
+        cuerpo.setBorder(new EmptyBorder(16, 24, 16, 24));
+
+        cuerpo.add(crearSeccionTexto(
+                "1. ¿QUÉ VAS A REALIZAR EN ESTE PROGRAMA?",
+                "Evaluarás el rendimiento real en nanosegundos de tres algoritmos de ordenamiento frente a "
+                + "distintos tamaños de arreglos (N), comprobando matemáticamente que queden ordenados.",
+                false
+        ));
+        cuerpo.add(Box.createVerticalStrut(10));
+
+        cuerpo.add(crearSeccionTexto(
+                "2. NAVEGACIÓN SUPERIOR (PESTAÑAS 1, 2, 3 Y 4)",
+                "• Pestaña 1 - Insertion Sort (Propio): Analiza tu algoritmo principal, teoría, código y tiempos.\n"
+                + "• Pestaña 2 - Bubble Sort: Evalúa el comportamiento cuadrático del ordenamiento burbuja.\n"
+                + "• Pestaña 3 - Quick Sort: Observa la eficiencia del algoritmo recursivo divide y vencerás.\n"
+                + "• Pestaña 4 - Comparación General: Enfrenta los tres algoritmos en una misma gráfica.",
+                false
+        ));
+        cuerpo.add(Box.createVerticalStrut(10));
+
+        cuerpo.add(crearSeccionTexto(
+                "3. CONTROLES Y HERRAMIENTAS INTERACTIVAS",
+                "• Reproducir Avance / Reiniciar / Mostrar Todo: Controla la animación de las curvas.\n"
+                + "• Guardar PNG: Exporta cualquier gráfica a imagen de alta resolución para tus informes.\n"
+                + "• Puntos y Tarjetas Interactivas: Pasa el cursor sobre los puntos de la curva o sobre\n"
+                + "  las tarjetas superiores para ver tiempos exactos (ns), verificación y complejidad Big-O.\n"
+                + "• Botón '? Guía de Uso': Vuelve a abrir esta ventana cuando lo necesites desde arriba.",
+                false
+        ));
+
+        // 3. Pie de ventana con botón para iniciar
+        JPanel footer = new JPanel(new FlowLayout(FlowLayout.RIGHT, 24, 14));
+        footer.setBackground(COLOR_TARJETA);
+        footer.setBorder(BorderFactory.createMatteBorder(1, 0, 0, 0, COLOR_BORDE));
+
+        JButton btnComenzar = crearBotonEstilizado("Comenzar Exploración  ►", COLOR_INSERTION);
+        btnComenzar.setFont(new Font("Segoe UI", Font.BOLD, 13));
+        btnComenzar.addActionListener(e -> dialogo.dispose());
+        footer.add(btnComenzar);
+
+        dialogo.add(header, BorderLayout.NORTH);
+        dialogo.add(cuerpo, BorderLayout.CENTER);
+        dialogo.add(footer, BorderLayout.SOUTH);
+
+        dialogo.setVisible(true);
+    }
+
+
+
 }
